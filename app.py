@@ -164,9 +164,18 @@ with st.sidebar:
         st.header("⚙️ 参数设置")
 
         if mode == "驾驶舱":
-            st.caption("实时市场全景 · 数据源: akshare + baostock")
+            st.caption("实时市场全景监控")
             st.divider()
-            st.caption("点击下方按钮刷新市场数据")
+            st.markdown("""
+            **数据源说明**
+            - 指数快照: baostock (实时)
+            - 市场宽度/板块/资金: akshare
+            - 新闻要闻: 东方财富
+            - 北向资金: 沪深港通
+            """)
+            st.caption("数据缓存 5 分钟，点击按钮强制刷新")
+            st.divider()
+            st.caption("注: 部分 East Money API 可能因反爬限制不可用")
             max_stocks = 0
             top_n = 0
             rate_limit = 3.0
@@ -217,10 +226,10 @@ with st.sidebar:
                 - 仅 A 股 (沪深北)
 
                 **Tier 2 · 财务门槛**
-                - ROE ≥ 10%
+                - ROE ≥ 8%
                 - 净利 > 0
-                - 营收 > 5亿
-                - 负债率 < 60%
+                - 营收 > 3亿
+                - 负债率 < 70%
 
                 **九维度打分 (0-100)**
                 | 维度 | 权重 | 说明 |
@@ -291,6 +300,12 @@ with st.sidebar:
 @st.cache_data(ttl=3600, show_spinner=False)
 def cached_universe():
     return fetch_universe()
+
+# ── Cached cockpit fetch ──
+@st.cache_data(ttl=300, show_spinner="🔄 正在加载市场数据...")
+def cached_cockpit_data():
+    """Cached cockpit data with 5-minute TTL."""
+    return get_cockpit_data()
 
 # ── Main area ──
 
@@ -574,15 +589,17 @@ def _render_cockpit_sections(data: dict):
     # ── Section 3: Market breadth ──
     breadth = data.get("market_breadth", {})
     bcols = st.columns(6)
-    bcols[0].metric("上涨", breadth.get("advance", "--"))
-    bcols[1].metric("下跌", breadth.get("decline", "--"), delta_color="inverse")
-    bcols[2].metric("平盘", breadth.get("flat", "--"))
-    bcols[3].metric("成交额", f"{breadth.get('volume_yi', 0):.0f}亿" if breadth.get("volume_yi") else "--")
-    bcols[4].metric("涨停", breadth.get("limit_up", "--"))
-    bcols[5].metric("跌停", breadth.get("limit_down", "--"))
+    bcols[0].metric("尾盘涨停", breadth.get("limit_up", "--"))
+    bcols[1].metric("强势股", breadth.get("advance", "--"))
+    bcols[2].metric("成交额", f"{breadth.get('volume_yi', 0):.0f}亿" if breadth.get("volume_yi") else "--")
+    sse_pe = breadth.get("sse_pe", 0)
+    bcols[3].metric("上证PE", f"{sse_pe:.1f}" if sse_pe else "--")
+    sse_to = breadth.get("sse_turnover", 0)
+    bcols[4].metric("换手率", f"{sse_to:.2f}%" if sse_to else "--")
+    bcols[5].metric("挂牌数", breadth.get("total_stocks", "--"))
 
     if breadth.get("_error"):
-        st.caption(f"市场宽度数据: {breadth['_error']}")
+        st.caption(f"全市场宽度不可用，显示上证交易所摘要 | {breadth['_error']}")
 
     st.divider()
 
@@ -699,12 +716,26 @@ def _render_cockpit_sections(data: dict):
         ncols = st.columns(2)
         for j, n in enumerate(news_list[:8]):
             with ncols[j % 2]:
-                st.markdown(f"""
-                <div class="news-item">
-                    <span style="color:#e6edf3;">{n['title'][:70]}</span><br>
-                    <span style="color:#484f58; font-size:0.75em;">{n.get('time', '')}</span>
-                </div>
-                """, unsafe_allow_html=True)
+                url = n.get('url', '')
+                title = n['title'][:80]
+                summary = n.get('summary', '')
+                time_str = n.get('time', '')
+                if url:
+                    st.markdown(f"""
+                    <div class="news-item">
+                        <a href="{url}" target="_blank" style="color:#58a6ff; text-decoration:none; font-weight:600;">
+                            {title}
+                        </a>
+                        <span style="color:#484f58; font-size:0.75em; margin-left:8px;">{time_str[:10]}</span>
+                    </div>
+                    """, unsafe_allow_html=True)
+                else:
+                    st.markdown(f"""
+                    <div class="news-item">
+                        <span style="color:#e6edf3;">{title}</span>
+                        <span style="color:#484f58; font-size:0.75em; margin-left:8px;">{time_str[:10]}</span>
+                    </div>
+                    """, unsafe_allow_html=True)
     elif news_data.get("_error"):
         st.info(f"新闻数据暂不可用 — {news_data['_error']}")
     else:
@@ -823,9 +854,10 @@ def _render_cockpit(run_clicked: bool):
         """, unsafe_allow_html=True)
         return
 
-    # Fetch data
-    with st.spinner("正在加载市场数据..."):
-        data = get_cockpit_data()
+    # Fetch data (force refresh on button click, use cache otherwise)
+    if run_clicked:
+        cached_cockpit_data.clear()
+    data = cached_cockpit_data()
 
     if data is None:
         st.error("数据获取失败，请稍后重试")

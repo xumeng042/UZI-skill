@@ -27,7 +27,7 @@ sys.path.insert(0, SCRIPTS_DIR)
 
 # ── Helpers ────────────────────────────────────────────────────────────────
 
-def _safe_call(fn, default=None, label="", retries=2):
+def _safe_call(fn, default=None, label="", retries=1):
     """Wrap a callable with try/except + retry, return default on failure."""
     last_err = None
     for attempt in range(retries + 1):
@@ -36,7 +36,7 @@ def _safe_call(fn, default=None, label="", retries=2):
         except Exception as e:
             last_err = e
             if attempt < retries:
-                wait = (attempt + 1) * 2  # 2s, 4s backoff
+                wait = (attempt + 1) * 3  # 3s backoff
                 if label:
                     print(f"  [cockpit] {label} retry {attempt+1}/{retries} in {wait}s: {e}",
                           file=sys.stderr, flush=True)
@@ -150,18 +150,54 @@ def fetch_index_snapshot() -> Dict:
 # ── 2. 市场宽度 ────────────────────────────────────────────────────────────
 
 def fetch_market_breadth() -> Dict:
-    """Compute market breadth from all-A-share snapshot."""
+    """Market breadth from SSE daily deal + limit-up pools.
+
+    Uses stock_sse_deal_daily (SSE summary) and stock_zt_pool_em (limit-up).
+    Falls back gracefully when East Money push2 API is unreachable.
+    """
     result = {"advance": 0, "decline": 0, "flat": 0,
               "limit_up": 0, "limit_down": 0, "volume_yi": 0,
-              "total_stocks": 0, "_error": None}
+              "total_stocks": 0, "sse_pe": 0, "sse_turnover": 0,
+              "_error": None}
 
     try:
         import akshare as ak
 
-        # All-A-share snapshot
+        # SSE daily summary — works reliably (not push2 API)
+        sse = _safe_call(lambda: ak.stock_sse_deal_daily(), label="sse_deal")
+        if sse is not None and not sse.empty:
+            try:
+                vol_row = sse[sse["单日情况"] == "成交金额"]
+                if not vol_row.empty:
+                    result["volume_yi"] = round(float(vol_row["股票"].iloc[0]), 0)
+                pe_row = sse[sse["单日情况"] == "平均市盈率"]
+                if not pe_row.empty:
+                    result["sse_pe"] = round(float(pe_row["股票"].iloc[0]), 1)
+                to_row = sse[sse["单日情况"] == "换手率"]
+                if not to_row.empty:
+                    result["sse_turnover"] = round(float(to_row["股票"].iloc[0]), 2)
+                count_row = sse[sse["单日情况"] == "挂牌数"]
+                if not count_row.empty:
+                    result["total_stocks"] = int(float(count_row["股票"].iloc[0]))
+            except Exception:
+                pass
+
+        # Limit-up pools (these work — not push2 API)
+        today = datetime.now().strftime("%Y%m%d")
+        zt = _safe_call(lambda: ak.stock_zt_pool_em(date=today), label="zt_pool")
+        if zt is not None and not zt.empty:
+            result["limit_up"] = len(zt)
+
+        # Strong stocks pool for advance/decline approximation
+        strong = _safe_call(lambda: ak.stock_zt_pool_strong_em(date=today), label="zt_strong")
+        if strong is not None and not strong.empty:
+            # These are stocks near limit-up, use as advance proxy
+            result["advance"] = len(strong)
+
+        # Try A-share spot for full breadth (may fail)
         spot = _safe_call(
             lambda: ak.stock_zh_a_spot_em(),
-            label="stock_zh_a_spot"
+            label="stock_zh_a_spot", retries=0,
         )
         if spot is not None and not spot.empty:
             changes = pd.to_numeric(spot["涨跌幅"], errors="coerce")
@@ -169,19 +205,8 @@ def fetch_market_breadth() -> Dict:
             result["advance"] = int((changes > 0).sum())
             result["decline"] = int((changes < 0).sum())
             result["flat"] = int((changes == 0).sum())
-            result["volume_yi"] = round(volumes.sum() / 1e8, 0)  # 亿
+            result["volume_yi"] = round(volumes.sum() / 1e8, 0)
             result["total_stocks"] = len(spot)
-        else:
-            result["_error"] = "全市场快照数据不可用"
-
-        # Limit-up/down pools
-        today = datetime.now().strftime("%Y%m%d")
-        zt = _safe_call(lambda: ak.stock_zt_pool_em(date=today), label="zt_pool")
-        if zt is not None and not zt.empty:
-            result["limit_up"] = len(zt)
-
-        # Detect near-limit-down stocks from spot data (stock_dt_pool_em not available)
-        if spot is not None and not spot.empty:
             result["limit_down"] = int((changes < -9.5).sum())
 
     except Exception as e:
@@ -189,21 +214,22 @@ def fetch_market_breadth() -> Dict:
 
     return result
 
+    return result
+
 
 # ── 3. 板块热力图 ──────────────────────────────────────────────────────────
 
 def fetch_sector_heatmap(top_n: int = 10) -> Dict:
-    """Get top gaining and losing industry sectors."""
+    """Get top gaining and losing industry sectors via akshare."""
     result = {"top_gainers": [], "top_losers": [], "_error": None}
 
     try:
         import akshare as ak
-        df = _safe_call(lambda: ak.stock_board_industry_name_em(), label="board_industry")
+        df = _safe_call(lambda: ak.stock_board_industry_name_em(), label="board_industry", retries=0)
         if df is None or df.empty:
-            result["_error"] = "板块数据不可用"
+            result["_error"] = "板块数据不可用（API 暂时受限）"
             return result
 
-        # Sort by change%
         df["change_num"] = pd.to_numeric(df["涨跌幅"], errors="coerce")
         df_sorted = df.dropna(subset=["change_num"]).sort_values("change_num", ascending=False)
 
@@ -213,14 +239,12 @@ def fetch_sector_heatmap(top_n: int = 10) -> Dict:
                 "change_pct": round(float(row["change_num"]), 2),
                 "lead_stock": str(row.get("领涨股票", "")),
             })
-
         for _, row in df_sorted.tail(top_n).iterrows():
             result["top_losers"].append({
                 "name": str(row.get("板块名称", "")),
                 "change_pct": round(float(row["change_num"]), 2),
                 "lead_stock": str(row.get("领跌股票", "")),
             })
-        # Reverse so worst is first
         result["top_losers"].reverse()
 
     except Exception as e:
@@ -239,7 +263,7 @@ def fetch_capital_radar(top_n: int = 5) -> Dict:
         import akshare as ak
         df = _safe_call(
             lambda: ak.stock_sector_fund_flow_rank(indicator="今日", sector_type="行业资金流"),
-            label="fund_flow_rank",
+            label="fund_flow_rank", retries=0,
         )
         if df is None or df.empty:
             result["_error"] = "资金流向数据不可用"
@@ -301,7 +325,7 @@ def fetch_risk_alerts() -> Dict:
         import akshare as ak
 
         # Risk sectors: >3% decline
-        board = _safe_call(lambda: ak.stock_board_industry_name_em(), label="risk_board")
+        board = _safe_call(lambda: ak.stock_board_industry_name_em(), label="risk_board", retries=0)
         if board is not None and not board.empty:
             for _, row in board.iterrows():
                 chg = float(row.get("涨跌幅", 0) or 0)
@@ -313,7 +337,7 @@ def fetch_risk_alerts() -> Dict:
                     })
 
         # Near-limit-down stocks from spot data
-        spot = _safe_call(lambda: ak.stock_zh_a_spot_em(), label="risk_spot")
+        spot = _safe_call(lambda: ak.stock_zh_a_spot_em(), label="risk_spot", retries=0)
         if spot is not None and not spot.empty:
             for _, row in spot.iterrows():
                 chg = float(row.get("涨跌幅", 0) or 0)
@@ -342,7 +366,7 @@ def fetch_risk_alerts() -> Dict:
 # ── 6. 市场要闻 ────────────────────────────────────────────────────────────
 
 def fetch_market_news(limit: int = 8) -> Dict:
-    """Fetch recent market-wide news."""
+    """Fetch recent market-wide news with URLs."""
     result = {"news": [], "_error": None}
 
     try:
@@ -356,15 +380,21 @@ def fetch_market_news(limit: int = 8) -> Dict:
             result["_error"] = "新闻数据不可用"
             return result
 
-        # Columns vary by source; try common patterns
         title_col = next((c for c in ["标题", "title", "内容"] if c in df.columns), df.columns[0])
         time_col = next((c for c in ["发布时间", "time", "pub_time"] if c in df.columns), None)
+        url_col = next((c for c in ["链接", "url", "link"] if c in df.columns), None)
+        summary_col = next((c for c in ["摘要", "summary", "desc"] if c in df.columns), None)
 
         for _, row in df.head(limit).iterrows():
-            result["news"].append({
-                "title": str(row.get(title_col, ""))[:80],
+            item = {
+                "title": str(row.get(title_col, ""))[:100],
                 "time": str(row.get(time_col, ""))[:19] if time_col else "",
-            })
+            }
+            if url_col:
+                item["url"] = str(row.get(url_col, ""))
+            if summary_col:
+                item["summary"] = str(row.get(summary_col, ""))[:120]
+            result["news"].append(item)
 
     except Exception as e:
         result["_error"] = str(e)[:80]
@@ -397,19 +427,25 @@ def fetch_northbound_flow(days: int = 20) -> Dict:
                 flows = []
                 for _, row in nb.iterrows():
                     try:
+                        val = float(row[flow_col])
+                        if math.isnan(val):
+                            continue
                         flows.append({
                             "date": str(row.get(date_col, ""))[:10] if date_col else "",
-                            "net_yi": round(float(row[flow_col]) / 1e8, 2),
+                            "net_yi": round(val / 1e8, 2),
                         })
                     except (ValueError, TypeError):
                         continue
 
                 if flows:
                     result["daily_flows"] = flows[-days:]
-                    result["latest_net_yi"] = result["daily_flows"][-1]["net_yi"]
-                    result["cumulative_5d_yi"] = round(sum(f["net_yi"] for f in result["daily_flows"][-5:]), 2)
-                    result["cumulative_20d_yi"] = round(sum(f["net_yi"] for f in result["daily_flows"][-20:]), 2)
-                    result["direction"] = "流入" if result["latest_net_yi"] > 0 else "流出"
+                    # Use last valid (non-NaN) value for latest
+                    valid_flows = [f for f in result["daily_flows"] if not (math.isnan(f["net_yi"]) if isinstance(f["net_yi"], float) else False)]
+                    if valid_flows:
+                        result["latest_net_yi"] = valid_flows[-1]["net_yi"]
+                        result["cumulative_5d_yi"] = round(sum(f["net_yi"] for f in valid_flows[-5:]), 2)
+                        result["cumulative_20d_yi"] = round(sum(f["net_yi"] for f in valid_flows[-20:]), 2)
+                        result["direction"] = "流入" if result["latest_net_yi"] > 0 else "流出"
             else:
                 # Try separate 沪股通/深股通
                 sh = _safe_call(lambda: ak.stock_em_hsgt_north_net_flow_in(indicator="沪股通"), label="nb_sh")
