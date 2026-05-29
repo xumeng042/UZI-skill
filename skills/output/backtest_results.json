@@ -1,0 +1,62 @@
+[
+  {
+    "test_date": "2026-02-27",
+    "n_total": 143,
+    "failures": 50,
+    "elapsed": 714.2,
+    "metrics": {
+      "1m": {
+        "n": 143,
+        "avg_prob": 63.4,
+        "avg_ret": -5.01,
+        "up_ratio": 26.6,
+        "direction_acc": 45.5,
+        "up_hit_rate": 28.2,
+        "down_hit_rate": 84.0,
+        "brier_score": 0.3562,
+        "top_q_avg_ret": -7.61,
+        "bot_q_avg_ret": -5.28,
+        "top_q_up_pct": 25.7
+      },
+      "2m": {
+        "n": 143,
+        "avg_prob": 60.0,
+        "avg_ret": -5.61,
+        "up_ratio": 20.3,
+        "direction_acc": 36.4,
+        "up_hit_rate": 21.0,
+        "down_hit_rate": 78.9,
+        "brier_score": 0.3432,
+        "top_q_avg_ret": -7.74,
+        "bot_q_avg_ret": -5.23,
+        "top_q_up_pct": 14.3
+      },
+      "3m": {
+        "n": 143,
+        "avg_prob": 56.8,
+        "avg_ret": -1.98,
+        "up_ratio": 30.8,
+        "direction_acc": 47.6,
+        "up_hit_rate": 33.9,
+        "down_hit_rate": 82.4,
+        "brier_score": 0.2827,
+        "top_q_avg_ret": -2.38,
+        "bot_q_avg_ret": -4.98,
+        "top_q_up_pct": 28.6
+      },
+      "6m": {
+        "n": 143,
+        "avg_prob": 53.7,
+        "avg_ret": -5.01,
+        "up_ratio": 24.5,
+        "direction_acc": 42.0,
+        "up_hit_rate": 48.0,
+        "down_hit_rate": 100.0,
+        "brier_score": 0.2604,
+        "top_q_avg_ret": 0.43,
+        "bot_q_avg_ret": -7.45,
+        "top_q_up_pct": 34.3
+      }
+    }
+  }
+]

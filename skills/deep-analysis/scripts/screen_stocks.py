@@ -87,7 +87,7 @@ def fetch_one_stock(code: str, name: str) -> Optional[Dict[str, Any]]:
 
 def _fetch_latest(bs_mod, code, m):
     """Use Q4 (annual) data for reliable ratios. Q1 may have empty revenue."""
-    for (y, q) in [(2024, 4), (2023, 4), (2025, 1)]:
+    for (y, q) in [(2025, 4), (2024, 4), (2023, 4), (2025, 1)]:
         rs = bs_mod.query_profit_data(code=code, year=y, quarter=q)
         if rs.error_code != "0":
             continue
@@ -95,11 +95,10 @@ def _fetch_latest(bs_mod, code, m):
         if df.empty:
             continue
         r = df.iloc[-1]
-        # Q1 MBRevenue is often empty; prefer Q4
         rev = _f(r, "MBRevenue")
         if rev > 0:
             m["revenue_latest"] = round(rev / 1e8, 1)
-        m["roe_latest"] = round(_f(r, "roeAvg") * 100, 1)  # convert ratio to %
+        m["roe_latest"] = round(_f(r, "roeAvg") * 100, 1)
         m["net_margin"] = round(_f(r, "npMargin") * 100, 1)
         m["gross_margin"] = round(_f(r, "gpMargin") * 100, 1)
         np_val = _f(r, "netProfit")
@@ -110,7 +109,7 @@ def _fetch_latest(bs_mod, code, m):
 
 def _fetch_history(bs_mod, code, m):
     h = {"rev": [], "profit": [], "roe": [], "gm": []}
-    for year in [2021, 2022, 2023, 2024]:
+    for year in [2021, 2022, 2023, 2024, 2025]:
         rs = bs_mod.query_profit_data(code=code, year=year, quarter=4)
         if rs.error_code != "0":
             continue
@@ -163,7 +162,7 @@ def _fetch_history(bs_mod, code, m):
 
 
 def _fetch_balance(bs_mod, code, m):
-    for (y, q) in [(2024, 4), (2023, 4)]:
+    for (y, q) in [(2025, 4), (2024, 4), (2023, 4)]:
         rs = bs_mod.query_balance_data(code=code, year=y, quarter=q)
         if rs.error_code != "0":
             continue
@@ -492,13 +491,18 @@ def filter_financial(m: Dict[str, Any]) -> Optional[str]:
     np_val = m.get("net_profit_latest") or 0
     rev = m.get("revenue_latest") or 0
     debt = m.get("debt_ratio") or 100
-    if roe < 10:
+
+    # Detect stocks with no financial data (delisted/historical)
+    if roe == 0 and rev == 0 and np_val == 0:
+        return "数据不可用"
+
+    if roe < 8:
         return f"ROE={roe:.1f}%"
     if np_val <= 0:
         return "净亏损"
-    if rev < 5:
+    if rev < 3:
         return f"营收={rev:.1f}亿"
-    if debt > 60:
+    if debt > 70:
         return f"负债率={debt:.1f}%"
     return None
 
@@ -531,6 +535,7 @@ def run_screen(max_stocks: int = 0, top_n: int = 30, rate_limit: float = 10.0):
     try:
         results = []
         failures = 0
+        no_data_count = 0
         for i, (code, name) in enumerate(candidates):
             if (i + 1) % 50 == 0:
                 e = time.monotonic() - t0
@@ -547,6 +552,8 @@ def run_screen(max_stocks: int = 0, top_n: int = 30, rate_limit: float = 10.0):
 
             fail = filter_financial(m)
             if fail:
+                if fail == "数据不可用":
+                    no_data_count += 1
                 continue
 
             results.append(score_stock(m))
@@ -560,6 +567,7 @@ def run_screen(max_stocks: int = 0, top_n: int = 30, rate_limit: float = 10.0):
         "elapsed": round(time.monotonic() - t0, 1),
         "t2_passed": len(results),
         "failures": failures,
+        "no_data": no_data_count,
     })
     return results, stats
 
