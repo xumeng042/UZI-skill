@@ -11,7 +11,6 @@ import os
 import time
 import io
 import json
-import csv as csv_mod
 from datetime import datetime
 
 import pandas as pd
@@ -22,11 +21,10 @@ SCRIPTS_DIR = os.path.join(os.path.dirname(__file__), "skills", "deep-analysis",
 sys.path.insert(0, SCRIPTS_DIR)
 from screen_stocks import (
     fetch_universe, filter_basic, filter_financial,
-    fetch_one_stock, score_stock, run_screen,
+    fetch_one_stock, score_stock,
 )
-from trend_predict import predict_batch, predict_one_stock, prob_color
+from trend_predict import predict_one_stock
 from market_regime import get_regime
-from industry_benchmark import score_with_industry_benchmarks
 from cockpit import get_cockpit_data
 
 # ── Page config ──
@@ -64,21 +62,28 @@ def save_history(mode: str, params: dict, stats: dict, results: list, portfolio:
     """Save a run to history."""
     _ensure_history_dir()
     now = datetime.now()
-    prefix = "scr" if mode == "选股排名" else "trd"
+    prefix_map = {"选股排名": "scr", "趋势预判": "trd", "量化扫描": "qnt", "价值投资": "val"}
+    prefix = prefix_map.get(mode, "unk")
     rid = f"{prefix}_{now.strftime('%Y%m%d_%H%M%S')}"
     top3 = []
     for r in results[:3]:
         nm = r.get("name", "?")
         if mode == "选股排名":
             top3.append(f"{nm} {r.get('total', 0):.0f}")
-        else:
+        elif mode == "趋势预判":
             top3.append(f"{nm} 半年{r.get('prob_6m', 0):.1f}%")
+        elif mode == "量化扫描":
+            top3.append(f"{nm} {r.get('total_score', 0):.1f}")
+        else:
+            top3.append(f"{nm} {r.get('total', 0):.1f}")
     entry = {"id": rid, "ts": now.isoformat(), "mode": mode, "params": params, "stats": stats, "top3": top3}
     result_path = os.path.join(HISTORY_DIR, f"{rid}.json")
     with open(result_path, "w", encoding="utf-8") as f:
-        json.dump({"id": rid, "ts": now.isoformat(), "mode": mode,
-                    "params": params, "stats": stats, "results": results},
-                   f, ensure_ascii=False, indent=2)
+        dump_data = {"id": rid, "ts": now.isoformat(), "mode": mode,
+                     "params": params, "stats": stats, "results": results}
+        if portfolio:
+            dump_data["portfolio"] = portfolio
+        json.dump(dump_data, f, ensure_ascii=False, indent=2)
     index_path = os.path.join(HISTORY_DIR, "index.json")
     index = []
     if os.path.exists(index_path):
@@ -218,57 +223,58 @@ with st.sidebar:
         run_clicked = st.button(btn_labels.get(mode, "▶️ 开始"), type="primary", use_container_width=True)
 
         st.divider()
-        with st.expander("筛选标准速查"):
-            if mode == "选股排名":
-                st.markdown("""
-                **Tier 1 · 基础过滤**
-                - 排除 ST/\*ST/N/C/PT
-                - 仅 A 股 (沪深北)
+        if mode != "驾驶舱":
+            with st.expander("筛选标准速查"):
+                if mode == "选股排名":
+                    st.markdown("""
+                    **Tier 1 · 基础过滤**
+                    - 排除 ST/\\*ST/N/C/PT
+                    - 仅 A 股 (沪深北)
 
-                **Tier 2 · 财务门槛**
-                - ROE ≥ 8%
-                - 净利 > 0
-                - 营收 > 3亿
-                - 负债率 < 70%
+                    **Tier 2 · 财务门槛**
+                    - ROE ≥ 8%
+                    - 净利 > 0
+                    - 营收 > 3亿
+                    - 负债率 < 70%
 
-                **九维度打分 (0-100)**
-                | 维度 | 权重 | 说明 |
-                |---|---|---|
-                | 盈利能力 | 20% | ROE + 利润率(行业Z-score校准) |
-                | 成长性 | 16% | 收入/利润 3年CAGR(行业Z-score校准) |
-                | 财务健康 | 15% | 负债率 + 流动比率 |
-                | 估值 | 13% | PE/PB 分位 |
-                | 护城河 | 8% | 毛利率稳定性 + ROE持续性 |
-                | 政策风口 | 8% | 十五五规划重点领域 |
-                | 机构持仓 | 8% | 国家队/社保/险资/北向/QFII |
-                | 行业周期 | 7% | 周期阶段 + 季节特征 |
-                | 实控风险 | 5% | 实控人性质 + 道德风险 |
-                """)
-            else:
-                st.markdown("""
-                **技术指标 (每周期 0-100)**
-                - 均线排列 (MA5/10/20/60/120)
-                - MACD (金叉/死叉/水上水下)
-                - RSI(14) 强弱
-                - Weinstein 阶段分析
-                - 量价配合
-                - 价格位置
+                    **九维度打分 (0-100)**
+                    | 维度 | 权重 | 说明 |
+                    |---|---|---|
+                    | 盈利能力 | 20% | ROE + 利润率(行业Z-score校准) |
+                    | 成长性 | 16% | 收入/利润 3年CAGR(行业Z-score校准) |
+                    | 财务健康 | 15% | 负债率 + 流动比率 |
+                    | 估值 | 13% | PE/PB 分位 |
+                    | 护城河 | 8% | 毛利率稳定性 + ROE持续性 |
+                    | 政策风口 | 8% | 十五五规划重点领域 |
+                    | 机构持仓 | 8% | 国家队/社保/险资/北向/QFII |
+                    | 行业周期 | 7% | 周期阶段 + 季节特征 |
+                    | 实控风险 | 5% | 实控人性质 + 道德风险 |
+                    """)
+                elif mode == "趋势预判":
+                    st.markdown("""
+                    **技术指标 (每周期 0-100)**
+                    - 均线排列 (MA5/10/20/60/120)
+                    - MACD (金叉/死叉/水上水下)
+                    - RSI(14) 强弱
+                    - Weinstein 阶段分析
+                    - 量价配合
+                    - 价格位置
 
-                **预判周期权重**
-                | 周期 | 技术 | 九维度基本面 |
-                |---|---|---|
-                | 1月 | 70% | 30% |
-                | 2月 | 65% | 35% |
-                | 3月 | 50% | 50% |
-                | 半年+ | 40% | 60% |
+                    **预判周期权重**
+                    | 周期 | 技术 | 九维度基本面 |
+                    |---|---|---|
+                    | 1月 | 70% | 30% |
+                    | 2月 | 65% | 35% |
+                    | 3月 | 50% | 50% |
+                    | 半年+ | 40% | 60% |
 
-                **增强特性**
-                - 市场牛熊状态显示（沪深300 MA排列，仅供参考）
-                - MACD/RSI 顶底背离检测
-                - 行业内相对排名（Z-score标准化）
-                - RS相对强度 / ADX趋势强度
-                - 自适应概率校准
-                """)
+                    **增强特性**
+                    - 市场牛熊状态显示（沪深300 MA排列，仅供参考）
+                    - MACD/RSI 顶底背离检测
+                    - 行业内相对排名（Z-score标准化）
+                    - RS相对强度 / ADX趋势强度
+                    - 自适应概率校准
+                    """)
             if mode == "量化扫描":
                 st.markdown("""
                 **量化三因子 (0-100)**
@@ -514,12 +520,13 @@ def run_trend_prediction(max_stocks, top_n, rate_limit, horizon_sort):
 
     # ── Portfolio selection ──
     from trend_predict import select_portfolio
+    total_predicted = len(results)
     portfolio = select_portfolio(results)
     results = results[:top_n]
 
     stats = {
         "universe": len(df), "t1_passed": len(candidates),
-        "predicted": len(results), "elapsed": round(elapsed, 1),
+        "predicted": total_predicted, "elapsed": round(elapsed, 1),
         "failures": failures, "no_data": no_data,
         "portfolio_n": len(portfolio),
     }
@@ -879,7 +886,8 @@ elif mode == "历史记录":
     else:
         for i, entry in enumerate(hist_list):
             ts = entry["ts"][:19].replace("T", " ")
-            mode_icon = "🏆" if entry["mode"] == "选股排名" else "🔮"
+            mode_icons = {"选股排名": "🏆", "趋势预判": "🔮", "量化扫描": "⚡", "价值投资": "💰"}
+            mode_icon = mode_icons.get(entry["mode"], "📊")
             top3_str = " · ".join(entry["top3"]) if entry.get("top3") else "—"
 
             with st.expander(f"{mode_icon} {ts} | {entry['mode']} | "
@@ -891,13 +899,12 @@ elif mode == "历史记录":
                     if detail and detail.get("results"):
                         if detail["mode"] == "选股排名":
                             df = pd.DataFrame(detail["results"])
-                            # Only show columns that exist (backwards compat)
                             wanted = ["code","name","total","profitability","growth","health",
                                       "valuation","moat","policy","institutional","cycle","controller"]
                             available = [c for c in wanted if c in df.columns]
                             st.dataframe(df[available],
                                          use_container_width=True, hide_index=True)
-                        else:
+                        elif detail["mode"] == "趋势预判":
                             rows = [{"#": j+1, "代码": r["code"], "名称": r["name"],
                                      "1月↑%": r["prob_1m"], "2月↑%": r["prob_2m"],
                                      "3月↑%": r["prob_3m"], "半年↑%": r["prob_6m"],
@@ -908,6 +915,37 @@ elif mode == "历史记录":
                                      "实控": r.get("controller", 0), "总分": r.get("total", 0)}
                                     for j, r in enumerate(detail["results"])]
                             st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+                        elif detail["mode"] == "量化扫描":
+                            rows = [{"#": j+1, "代码": r["code"], "名称": r["name"],
+                                     "综合分": r["total_score"], "1日↑%": r["prob_1d"],
+                                     "3日↑%": r["prob_3d"], "5日↑%": r["prob_5d"],
+                                     "技术面": r["tech_score"], "舆情面": r["news_score"],
+                                     "资金面": r["flow_score"], "动量%": r["roc_5d"],
+                                     "量比": r["vol_ratio"], "RSI": r["rsi_7d"],
+                                     "舆情": r["news_label"], "资金信号": r["flow_signal"]}
+                                    for j, r in enumerate(detail["results"])]
+                            st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+                        elif detail["mode"] == "价值投资":
+                            rows = [{"#": j+1, "代码": r["code"], "名称": r["name"],
+                                     "总分": r["total"], "股息率%": r["div_yield"],
+                                     "分红年": r["div_years"], "PE分位%": r["pe_q"],
+                                     "PB分位%": r["pb_q"], "ROE%": r["roe"],
+                                     "负债%": r["debt"], "类型": r["soe"],
+                                     "股息得分": r["div_score"], "估值得分": r["val_score"],
+                                     "质量得分": r["fund_score"], "稳定得分": r["stab_score"]}
+                                    for j, r in enumerate(detail["results"])]
+                            st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+                        # Show portfolio if available
+                        portfolio = detail.get("portfolio")
+                        if portfolio:
+                            st.divider()
+                            st.subheader(f"💰 推荐买入组合 ({len(portfolio)} 支)")
+                            pcols = st.columns(min(4, len(portfolio)))
+                            for i, s in enumerate(portfolio):
+                                with pcols[i % 4]:
+                                    sig = s.get("signal_strength", "—")
+                                    border = "2px solid #4caf50" if "强" in sig else ("2px solid #ff9800" if "中等" in sig else "1px solid #999")
+                                    st.markdown(f"""<div style="border:{border}; border-radius:10px; padding:10px; margin:5px 0; background:#1a1a2e;"><b style="font-size:1.1em;">#{s['buy_rank']} {s['name']}</b><br><span style="font-size:0.8em; color:#888;">{s['code']}</span><br><span style="color:#4caf50;">半年↑ {s['prob_6m']:.0f}%</span> · <span style="color:#2196f3;">α {s.get('alpha_1m',0):+.1f}%</span><br><span style="font-size:0.8em;">{sig}</span></div>""", unsafe_allow_html=True)
                     else:
                         st.warning("记录文件缺失")
 
@@ -1151,6 +1189,11 @@ elif run_clicked:
         st.session_state.last_mode = mode
         st.session_state.last_run_at = datetime.now().strftime("%H:%M:%S")
 
+        save_history("量化扫描",
+                     {"max": max_stocks, "top": top_n, "rate": rate_limit,
+                      "news": with_news, "flow": with_flow},
+                     stats, results)
+
         if not results:
             st.warning("没有股票通过量化扫描。")
             st.stop()
@@ -1224,6 +1267,10 @@ elif run_clicked:
         st.session_state.value_stats = stats
         st.session_state.last_mode = mode
         st.session_state.last_run_at = datetime.now().strftime("%H:%M:%S")
+
+        save_history("价值投资",
+                     {"max": max_stocks, "top": top_n, "rate": rate_limit},
+                     stats, results)
 
         if not results:
             st.warning("没有股票通过价值投资筛选。当前市场高股息央国企可能估值已偏高。")
@@ -1356,11 +1403,10 @@ else:
                 pcols = st.columns(min(4, len(portfolio)))
                 for i, s in enumerate(portfolio):
                     with pcols[i % 4]:
-                        border = "#4caf50" if s.get("signal", "") == "强信号" else "#ff9800" if s.get("signal", "") == "中等信号" else "#607d8b"
-                        sig = s.get("signal", "")
-                        sig_icon = "🟢" if sig == "强信号" else "🟡" if sig == "中等信号" else "🟠"
-                        st.markdown(f"""<div style="border:2px solid {border}; border-radius:10px; padding:10px; margin:5px 0; background:#1a1a2e;"><b style="font-size:1.1em;">#{s['buy_rank']} {s['name']}</b><br><span style="font-size:0.8em; color:#888;">{s['code']}</span><br><span style="color:#4caf50;">半年↑ {s['prob_6m']:.0f}%</span> · <span style="color:#2196f3;">α {s.get('alpha_1m',0):+.1f}%</span><br><span style="font-size:0.8em;">ADX {s.get('adx_d',0):.0f} · 总分 {s.get('total',0):.0f}</span><br><span style="font-size:0.8em;">{sig_icon} {sig}</span></div>""", unsafe_allow_html=True)
-            prev_pred = None  # minimal re-render
+                        sig = s.get("signal_strength", "—")
+                        border = "2px solid #4caf50" if "强" in sig else ("2px solid #ff9800" if "中等" in sig else "1px solid #999")
+                        sig_icon = "🟢" if "强" in sig else ("🟡" if "中等" in sig else "🟠")
+                        st.markdown(f"""<div style="border:{border}; border-radius:10px; padding:10px; margin:5px 0; background:#1a1a2e;"><b style="font-size:1.1em;">#{s['buy_rank']} {s['name']}</b><br><span style="font-size:0.8em; color:#888;">{s['code']}</span><br><span style="color:#4caf50;">半年↑ {s['prob_6m']:.0f}%</span> · <span style="color:#2196f3;">α {s.get('alpha_1m',0):+.1f}%</span><br><span style="font-size:0.8em;">ADX {s.get('adx_d',0):.0f} · 总分 {s.get('total',0):.0f}</span><br><span style="font-size:0.8em;">{sig_icon} {sig}</span></div>""", unsafe_allow_html=True)
 
         elif mode == "量化扫描":
             results = _cached
