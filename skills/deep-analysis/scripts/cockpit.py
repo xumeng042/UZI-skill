@@ -3,12 +3,10 @@
 
 Sections:
 1. 指数快照 — 上证/深证/创业板/科创50
-2. 市场宽度 — 涨跌家数、涨停跌停、成交量
-3. 板块热力图 — 领涨/领跌行业板块
-4. 资金雷达 — 主力资金板块净流入/流出
-5. 风险预警 — 下跌板块、异常波动股
-6. 市场要闻 — 全市场重要新闻
-7. 北向资金 — 沪股通+深股通净流向
+2. 市场宽度 — 涨停数、成交额、上证PE、换手率
+3. 风险预警 — 跌停股、异常波动
+4. 市场要闻 — 全市场重要新闻(带链接)
+5. 北向资金 — 沪股通+深股通净流向
 """
 
 import time
@@ -219,104 +217,6 @@ def fetch_market_breadth() -> Dict:
 
 # ── 3. 板块热力图 ──────────────────────────────────────────────────────────
 
-def fetch_sector_heatmap(top_n: int = 10) -> Dict:
-    """Get top gaining and losing industry sectors via akshare."""
-    result = {"top_gainers": [], "top_losers": [], "_error": None}
-
-    try:
-        import akshare as ak
-        df = _safe_call(lambda: ak.stock_board_industry_name_em(), label="board_industry", retries=0)
-        if df is None or df.empty:
-            result["_error"] = "板块数据不可用（API 暂时受限）"
-            return result
-
-        df["change_num"] = pd.to_numeric(df["涨跌幅"], errors="coerce")
-        df_sorted = df.dropna(subset=["change_num"]).sort_values("change_num", ascending=False)
-
-        for _, row in df_sorted.head(top_n).iterrows():
-            result["top_gainers"].append({
-                "name": str(row.get("板块名称", "")),
-                "change_pct": round(float(row["change_num"]), 2),
-                "lead_stock": str(row.get("领涨股票", "")),
-            })
-        for _, row in df_sorted.tail(top_n).iterrows():
-            result["top_losers"].append({
-                "name": str(row.get("板块名称", "")),
-                "change_pct": round(float(row["change_num"]), 2),
-                "lead_stock": str(row.get("领跌股票", "")),
-            })
-        result["top_losers"].reverse()
-
-    except Exception as e:
-        result["_error"] = str(e)[:80]
-
-    return result
-
-
-# ── 4. 资金雷达 ────────────────────────────────────────────────────────────
-
-def fetch_capital_radar(top_n: int = 5) -> Dict:
-    """Get sector-level main force capital flow ranking."""
-    result = {"top_inflow": [], "top_outflow": [], "_error": None}
-
-    try:
-        import akshare as ak
-        df = _safe_call(
-            lambda: ak.stock_sector_fund_flow_rank(indicator="今日", sector_type="行业资金流"),
-            label="fund_flow_rank", retries=0,
-        )
-        if df is None or df.empty:
-            result["_error"] = "资金流向数据不可用"
-            return result
-
-        # Net flow column name varies; find it
-        flow_col = None
-        for c in ["主力净流入-净额", "主力净流入"]:
-            if c in df.columns:
-                flow_col = c
-                break
-        if flow_col is None:
-            result["_error"] = "资金流向字段缺失"
-            return result
-
-        df["flow_num"] = pd.to_numeric(df[flow_col], errors="coerce")
-        df_sorted = df.dropna(subset=["flow_num"]).sort_values("flow_num", ascending=False)
-
-        name_col = "名称" if "名称" in df.columns else df.columns[0]
-
-        for _, row in df_sorted.head(top_n).iterrows():
-            change_pct = 0
-            for cc in ["今日涨跌幅", "涨跌幅"]:
-                if cc in row.index:
-                    change_pct = float(row[cc]) if pd.notna(row[cc]) else 0
-                    break
-            result["top_inflow"].append({
-                "name": str(row.get(name_col, "")),
-                "net_flow_yi": round(float(row["flow_num"]) / 1e8, 2),
-                "change_pct": round(change_pct, 2),
-            })
-
-        for _, row in df_sorted.tail(top_n).iterrows():
-            change_pct = 0
-            for cc in ["今日涨跌幅", "涨跌幅"]:
-                if cc in row.index:
-                    change_pct = float(row[cc]) if pd.notna(row[cc]) else 0
-                    break
-            result["top_outflow"].append({
-                "name": str(row.get(name_col, "")),
-                "net_flow_yi": round(float(row["flow_num"]) / 1e8, 2),
-                "change_pct": round(change_pct, 2),
-            })
-        result["top_outflow"].reverse()
-
-    except Exception as e:
-        result["_error"] = str(e)[:80]
-
-    return result
-
-
-# ── 5. 风险预警 ────────────────────────────────────────────────────────────
-
 def fetch_risk_alerts() -> Dict:
     """Identify risk sectors and abnormal stocks."""
     result = {"alerts": [], "abnormal_stocks": [], "_error": None}
@@ -470,7 +370,7 @@ def fetch_northbound_flow(days: int = 20) -> Dict:
 # ── 编排器 ─────────────────────────────────────────────────────────────────
 
 def get_cockpit_data(use_threads: bool = True) -> Dict[str, Any]:
-    """Orchestrate all 7 data fetches. Returns dict keyed by section name.
+    """Orchestrate all 5 data fetches. Returns dict keyed by section name.
 
     Each section dict has data fields + optional '_error' key.
     The orchestrator never raises — individual failures are captured in _error.
@@ -481,8 +381,6 @@ def get_cockpit_data(use_threads: bool = True) -> Dict[str, Any]:
     fetchers = {
         "index_snapshot": fetch_index_snapshot,
         "market_breadth": fetch_market_breadth,
-        "sector_heatmap": fetch_sector_heatmap,
-        "capital_radar": fetch_capital_radar,
         "risk_alerts": fetch_risk_alerts,
         "market_news": fetch_market_news,
         "northbound_flow": fetch_northbound_flow,

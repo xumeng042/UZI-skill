@@ -173,8 +173,9 @@ with st.sidebar:
             st.divider()
             st.markdown("""
             **数据源说明**
-            - 指数快照: baostock (实时)
-            - 市场宽度/板块/资金: akshare
+            - 指数快照: baostock
+            - 市场宽度: 上证交易所摘要 + 涨停池
+            - 风险预警: 涨停板/强势股数据
             - 新闻要闻: 东方财富
             - 北向资金: 沪深港通
             """)
@@ -610,87 +611,8 @@ def _render_cockpit_sections(data: dict):
 
     st.divider()
 
-    # ── Section 4: Sector heatmap ──
-    heat = data.get("sector_heatmap", {})
-    col_gain, col_lose = st.columns(2)
 
-    with col_gain:
-        st.markdown("### 🔥 领涨板块")
-        gainers = heat.get("top_gainers", [])
-        if gainers:
-            for s in gainers[:8]:
-                pct = s["change_pct"]
-                st.markdown(f"""
-                <div class="cockpit-card" style="display:flex; justify-content:space-between; align-items:center; padding:8px 14px;">
-                    <span style="color:#e6edf3; flex:1;">{s['name']}</span>
-                    <span class="sector-tag-up">{pct:+.2f}%</span>
-                </div>
-                """, unsafe_allow_html=True)
-        elif heat.get("_error"):
-            st.info(f"板块数据暂不可用 — {heat['_error']}")
-        else:
-            st.caption("暂无数据")
-
-    with col_lose:
-        st.markdown("### ❄️ 领跌板块")
-        losers = heat.get("top_losers", [])
-        if losers:
-            for s in losers[:8]:
-                pct = s["change_pct"]
-                st.markdown(f"""
-                <div class="cockpit-card" style="display:flex; justify-content:space-between; align-items:center; padding:8px 14px;">
-                    <span style="color:#e6edf3; flex:1;">{s['name']}</span>
-                    <span class="sector-tag-down">{pct:+.2f}%</span>
-                </div>
-                """, unsafe_allow_html=True)
-        elif heat.get("_error"):
-            st.info(f"板块数据暂不可用 — {heat['_error']}")
-        else:
-            st.caption("暂无数据")
-
-    st.divider()
-
-    # ── Section 5: Capital radar ──
-    cf = data.get("capital_radar", {})
-    col_in, col_out = st.columns(2)
-
-    with col_in:
-        st.markdown("### 💰 主力净流入 TOP5")
-        top_in = cf.get("top_inflow", [])
-        if top_in:
-            for i, s in enumerate(top_in):
-                flow = s["net_flow_yi"]
-                st.markdown(f"""
-                <div class="cockpit-card" style="display:flex; justify-content:space-between; align-items:center; padding:8px 14px;">
-                    <span style="color:#e6edf3;">{i+1}. {s['name']}</span>
-                    <span style="color:#26a69a; font-weight:600;">+{flow:.1f}亿</span>
-                </div>
-                """, unsafe_allow_html=True)
-        elif cf.get("_error"):
-            st.info(f"资金数据暂不可用 — {cf['_error']}")
-        else:
-            st.caption("暂无数据")
-
-    with col_out:
-        st.markdown("### 💸 主力净流出 TOP5")
-        top_out = cf.get("top_outflow", [])
-        if top_out:
-            for i, s in enumerate(top_out):
-                flow = s["net_flow_yi"]
-                st.markdown(f"""
-                <div class="cockpit-card" style="display:flex; justify-content:space-between; align-items:center; padding:8px 14px;">
-                    <span style="color:#e6edf3;">{i+1}. {s['name']}</span>
-                    <span style="color:#ef5350; font-weight:600;">{flow:.1f}亿</span>
-                </div>
-                """, unsafe_allow_html=True)
-        elif cf.get("_error"):
-            st.info(f"资金数据暂不可用 — {cf['_error']}")
-        else:
-            st.caption("暂无数据")
-
-    st.divider()
-
-    # ── Section 6: Risk alerts ──
+    # ── Section 4: Risk alerts ──
     st.markdown("### ⚠️ 风险预警")
     risk = data.get("risk_alerts", {})
     alerts = risk.get("alerts", [])
@@ -715,7 +637,7 @@ def _render_cockpit_sections(data: dict):
 
     st.divider()
 
-    # ── Section 7: Market news ──
+    # ── Section 5: Market news ──
     st.markdown("### 📰 市场要闻")
     news_data = data.get("market_news", {})
     news_list = news_data.get("news", [])
@@ -750,7 +672,7 @@ def _render_cockpit_sections(data: dict):
 
     st.divider()
 
-    # ── Section 8: Northbound flow ──
+    # ── Section 6: Northbound flow ──
     st.markdown("### 🌏 北向资金")
     nb = data.get("northbound_flow", {})
     nbcols = st.columns(3)
@@ -809,22 +731,6 @@ def _render_cockpit(run_clicked: bool):
         font-weight: 700;
         color: #e6edf3;
     }
-    .sector-tag-up {
-        background: rgba(38,166,154,0.12);
-        color: #26a69a;
-        padding: 3px 10px;
-        border-radius: 4px;
-        font-weight: 600;
-        font-size: 0.9em;
-    }
-    .sector-tag-down {
-        background: rgba(239,83,80,0.12);
-        color: #ef5350;
-        padding: 3px 10px;
-        border-radius: 4px;
-        font-weight: 600;
-        font-size: 0.9em;
-    }
     .news-item {
         padding: 8px 12px;
         border-left: 2px solid #30363d;
@@ -852,7 +758,7 @@ def _render_cockpit(run_clicked: bool):
             <div style="font-size:4em; margin-bottom:16px;">🖥️</div>
             <h2 style="color:#e6edf3;">市场驾驶舱</h2>
             <p style="color:#8b949e; font-size:1.1em;">
-                实时指数 · 板块热力 · 资金雷达 · 风险预警 · 市场要闻
+                实时指数 · 市场宽度 · 风险预警 · 新闻要闻 · 北向资金
             </p>
             <p style="color:#484f58; font-size:0.85em;">
                 点击左侧 <b>🔄 刷新数据</b> 开始
