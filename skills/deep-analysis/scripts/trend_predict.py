@@ -20,7 +20,7 @@ sys.path.insert(0, os.path.join(SCRIPTS_DIR, "lib"))
 
 from screen_stocks import (
     fetch_universe, filter_basic, filter_financial,
-    fetch_one_stock, score_stock, _f,
+    fetch_one_stock, score_stock,
 )
 from policy_alpha import fetch_industry, fetch_growth_data, get_policy_score
 from market_regime import get_regime
@@ -563,6 +563,9 @@ def predict_one_stock(bs, code: str, name: str,
     prob_2m = raw_2m * 0.30 + prob_3m * 0.35 + prob_6m * 0.35
     # 3M and 6M unchanged — they are the anchors
 
+    # ADX for diagnostics
+    adx_d = ind_d.get("adx", 20) or 20 if ind_d else 20
+
     # ── Market regime (display only, no probability modification) ──
     if regime is None:
         regime = get_regime(bs)
@@ -604,40 +607,6 @@ def predict_one_stock(bs, code: str, name: str,
     prob_2m = min(95, max(5, prob_2m + rs_bonus_1m * 0.7 + rs_bonus_3m * 0.3))
     prob_3m = min(95, max(5, prob_3m + rs_bonus_3m))
     prob_6m = min(95, max(5, prob_6m + rs_bonus_3m * 0.5))
-
-    # ── Adaptive probability calibration ──
-    # Correct systematic over-optimism: backtest shows model predicts ~60%
-    # but only ~25-30% of stocks rise in weak/sideways markets.
-    # Scale probs toward 50 based on regime and ADX trend strength.
-    adx_d = ind_d.get("adx", 20) or 20 if ind_d else 20
-    if regime_score >= 65:
-        # 强势: minimal calibration, model is reasonably calibrated
-        cal_strength = 0.05
-    elif regime_score >= 40:
-        # 震荡: moderate pull toward 50
-        cal_strength = 0.12
-    else:
-        # 弱势: aggressive calibration
-        cal_strength = 0.18
-
-    # Reduce calibration if ADX shows strong trend (trend overrides regime)
-    if adx_d > 30:
-        cal_strength *= 0.5  # strong stock-level trend → trust the signal more
-    elif adx_d > 25:
-        cal_strength *= 0.7
-
-    prob_1m = round(prob_1m * (1 - cal_strength) + 50 * cal_strength, 1)
-    prob_2m = round(prob_2m * (1 - cal_strength) + 50 * cal_strength, 1)
-    prob_3m = round(prob_3m * (1 - cal_strength * 0.7) + 50 * cal_strength * 0.7, 1)
-    prob_6m = round(prob_6m * (1 - cal_strength * 0.4) + 50 * cal_strength * 0.4, 1)
-    # Keep raw probs for reference
-    prob_1m = min(95, max(5, prob_1m))
-    prob_2m = min(95, max(5, prob_2m))
-    prob_3m = min(95, max(5, prob_3m))
-    prob_6m = min(95, max(5, prob_6m))
-    # Keep raw probabilities — calibration removed per backtest evidence
-    # that regime-based adjustment hurts more than it helps.
-    # Industry z-score + divergence are the effective enhancements.
 
     return {
         "code": fin_data.get("code", code) if fin_data else code,

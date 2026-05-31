@@ -78,9 +78,17 @@ def fetch_one_stock(code: str, name: str) -> Optional[Dict[str, Any]]:
             return None
         raise
 
-    _fetch_institutional(code, m)
-    _fetch_cycle(m)
-    _fetch_controller(code, m)
+    try:
+        _fetch_institutional(code, m)
+        _fetch_cycle(m)
+        _fetch_controller(code, m)
+    except TimeoutError:
+        pass  # supplementary data — don't fail the stock
+    except Exception as e:
+        err = str(e)
+        if "接收数据异常" not in err and "timeout" not in err.lower():
+            print(f"  [screen] supplementary data error for {code}: {err[:60]}",
+                  file=sys.stderr, flush=True)
     _set_defaults(m)
     return m
 

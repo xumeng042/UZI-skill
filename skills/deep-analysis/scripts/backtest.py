@@ -102,6 +102,9 @@ def predict_at_date_enhanced(bs, code: str, name: str, fin_data: dict,
 
     regime_score = regime.get("score", 50)
 
+    # ADX for diagnostics
+    adx_d = ind_d.get("adx", 20) or 20
+
     # ── Relative Strength (RS) alpha ──
     index_ret_1m = regime.get("ret_1m", 0) or 0
     index_ret_3m = regime.get("ret_3m", 0) or 0
@@ -126,20 +129,6 @@ def predict_at_date_enhanced(bs, code: str, name: str, fin_data: dict,
     prob_2m = min(95, max(5, prob_2m + rs_bonus_1m * 0.7 + rs_bonus_3m * 0.3))
     prob_3m = min(95, max(5, prob_3m + rs_bonus_3m))
     prob_6m = min(95, max(5, prob_6m + rs_bonus_3m * 0.5))
-
-    # ── Adaptive probability calibration ──
-    adx_d = ind_d.get("adx", 20) or 20
-    if regime_score >= 65:      cal_strength = 0.05
-    elif regime_score >= 40:    cal_strength = 0.12
-    else:                       cal_strength = 0.18
-
-    if adx_d > 30:       cal_strength *= 0.5
-    elif adx_d > 25:     cal_strength *= 0.7
-
-    prob_1m = round(min(95, max(5, prob_1m * (1 - cal_strength) + 50 * cal_strength)), 1)
-    prob_2m = round(min(95, max(5, prob_2m * (1 - cal_strength) + 50 * cal_strength)), 1)
-    prob_3m = round(min(95, max(5, prob_3m * (1 - cal_strength * 0.7) + 50 * cal_strength * 0.7)), 1)
-    prob_6m = round(min(95, max(5, prob_6m * (1 - cal_strength * 0.4) + 50 * cal_strength * 0.4)), 1)
 
     return {
         "code": code, "name": name,

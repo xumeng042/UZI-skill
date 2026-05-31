@@ -212,10 +212,8 @@ def fetch_market_breadth() -> Dict:
 
     return result
 
-    return result
 
-
-# ── 3. 板块热力图 ──────────────────────────────────────────────────────────
+# ── 3. 风险预警 ────────────────────────────────────────────────────────────
 
 def fetch_risk_alerts() -> Dict:
     """Identify risk sectors and abnormal stocks."""

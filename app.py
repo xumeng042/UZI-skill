@@ -28,6 +28,9 @@ from screen_stocks import (
 from trend_predict import predict_one_stock
 from market_regime import get_regime
 from cockpit import get_cockpit_data
+from dividend_financing_ratio import (
+    run_dividend_screening,
+)
 
 # ── Page config ──
 st.set_page_config(
@@ -42,6 +45,7 @@ SESSION_KEYS = [
     "trd_results", "trd_stats", "trd_portfolio",
     "quant_results", "quant_stats",
     "value_results", "value_stats",
+    "dfr_results", "dfr_stats",
     "cockpit_data",
     "last_mode", "last_run_at",
 ]
@@ -64,7 +68,7 @@ def save_history(mode: str, params: dict, stats: dict, results: list, portfolio:
     """Save a run to history."""
     _ensure_history_dir()
     now = datetime.now()
-    prefix_map = {"选股排名": "scr", "趋势预判": "trd", "量化扫描": "qnt", "价值投资": "val"}
+    prefix_map = {"选股排名": "scr", "趋势预判": "trd", "量化扫描": "qnt", "价值投资": "val", "分红融资比": "dfr"}
     prefix = prefix_map.get(mode, "unk")
     rid = f"{prefix}_{now.strftime('%Y%m%d_%H%M%S')}"
     top3 = []
@@ -142,7 +146,7 @@ def clear_all_history():
         shutil.rmtree(HISTORY_DIR)
         _ensure_history_dir()
 
-mode = st.radio("📋 模式", ["驾驶舱", "选股排名", "趋势预判", "量化扫描", "价值投资", "历史记录"], horizontal=True)
+mode = st.radio("📋 模式", ["驾驶舱", "选股排名", "趋势预判", "量化扫描", "价值投资", "分红融资比", "历史记录"], horizontal=True)
 
 # ── Sidebar controls ──
 with st.sidebar:
@@ -222,6 +226,7 @@ with st.sidebar:
             "趋势预判": "🔮 开始预判",
             "量化扫描": "⚡ 量化扫描",
             "价值投资": "💰 价值排名",
+            "分红融资比": "💎 分红融资比选股",
         }
         run_clicked = st.button(btn_labels.get(mode, "▶️ 开始"), type="primary", use_container_width=True)
 
@@ -304,6 +309,32 @@ with st.sidebar:
                 | 基本面质量 | 25% |
                 | 稳定性 | 20% |
                 """)
+            if mode == "分红融资比":
+                st.markdown("""
+                **金标准（来自知乎 kaer）**
+                - 历史累计分红 > 历史累计融资
+
+                **五维评分 (0-100)**
+                | 维度 | 权重 | 说明 |
+                |---|---|---|
+                | 分红融资比 | 35% | 核心金标准，>1才值得投资 |
+                | 股息回报 | 25% | 当前股息率+3年均值 |
+                | 分红质量 | 20% | 连续分红年数+分红比例合理性 |
+                | 基本面 | 10% | ROE+负债率 |
+                | 分红承诺 | 10% | 章程是否明确分红比例 |
+                """)
+
+        if mode == "分红融资比":
+            st.divider()
+            st.caption("高级过滤")
+            require_ratio = st.checkbox("严格: 仅保留 分红融资比>1", value=True,
+                                        help="核心金标准：历史分红必须大于融资")
+            require_payout = st.checkbox("分红比例 30%-70%", value=True,
+                                         help="过低→抠门，过高→杀鸡取卵")
+            exclude_declining = st.checkbox("排除衰退/夕阳行业", value=True,
+                                            help="排除钢铁、煤炭、房地产、传统零售等")
+            min_yield = st.slider("最低股息率(%)", 0.0, 5.0, 2.0, 0.5,
+                                  help="当前股息率低于此值的将被排除")
 
 # ── Cached universe fetch ──
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -917,7 +948,7 @@ elif mode == "历史记录":
     else:
         for i, entry in enumerate(hist_list):
             ts = entry["ts"][:19].replace("T", " ")
-            mode_icons = {"选股排名": "🏆", "趋势预判": "🔮", "量化扫描": "⚡", "价值投资": "💰"}
+            mode_icons = {"选股排名": "🏆", "趋势预判": "🔮", "量化扫描": "⚡", "价值投资": "💰", "分红融资比": "💎"}
             mode_icon = mode_icons.get(entry["mode"], "📊")
             top3_str = " · ".join(entry["top3"]) if entry.get("top3") else "—"
 
@@ -964,6 +995,15 @@ elif mode == "历史记录":
                                      "负债%": r["debt"], "类型": r["soe"],
                                      "股息得分": r["div_score"], "估值得分": r["val_score"],
                                      "质量得分": r["fund_score"], "稳定得分": r["stab_score"]}
+                                    for j, r in enumerate(detail["results"])]
+                            st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+                        elif detail["mode"] == "分红融资比":
+                            rows = [{"#": j+1, "代码": r["code"], "名称": r["name"],
+                                     "总分": r["total"], "分红融资比": f"{r['div_fin_ratio']:.1f}x",
+                                     "股息率%": r["div_yield"], "连分年": r["consecutive_div_years"],
+                                     "分红比例%": r["payout_ratio"], "ROE%": r["roe"],
+                                     "负债%": r["debt"], "行业": r.get("industry", "")[:8],
+                                     "分红承诺": "✓" if r.get("has_commitment") else "—"}
                                     for j, r in enumerate(detail["results"])]
                             st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
                         # Show portfolio if available
@@ -1360,6 +1400,126 @@ elif run_clicked:
         st.caption("💡 **投资逻辑**: 高股息提供安全垫，央国企信用背书减少下行风险，估值低位提供向上空间。"
                    "适合作为底仓配置，持有周期 6-12 个月以上。不涨吃股息，涨了赚差价。")
 
+    elif mode == "分红融资比":
+        with st.spinner("💎 正在分红融资比筛选... 查询分红历史、计算融资比、多维度打分，预计需要 2-3 分钟"):
+            results, stats = run_dividend_screening(
+                max_stocks=max_stocks, top_n=top_n, rate_limit=rate_limit,
+                require_ratio_gt_1=require_ratio,
+                require_payout_30_70=require_payout,
+                exclude_declining=exclude_declining,
+                min_div_yield=min_yield,
+            )
+
+        st.session_state.dfr_results = results
+        st.session_state.dfr_stats = stats
+        st.session_state.last_mode = mode
+        st.session_state.last_run_at = datetime.now().strftime("%H:%M:%S")
+
+        save_history("分红融资比",
+                     {"max": max_stocks, "top": top_n, "rate": rate_limit,
+                      "ratio_gt_1": require_ratio, "payout_30_70": require_payout,
+                      "exclude_declining": exclude_declining, "min_yield": min_yield},
+                     stats, results)
+
+        if not results:
+            st.warning("没有股票通过分红融资比筛选。尝试放宽过滤条件。")
+            st.stop()
+
+        st.toast(f"✅ 分红融资比筛选完成！{len(results)} 只股票入围，耗时 {stats['elapsed']:.0f}s", icon="✅")
+
+        avg_ratio = sum(r["div_fin_ratio"] for r in results) / len(results)
+        avg_yield = sum(r["div_yield"] for r in results) / len(results)
+        col1, col2, col3, col4, col5 = st.columns(5)
+        col1.metric("💎 入选股票", f"{len(results)} 只")
+        col2.metric("📊 平均分红融资比", f"{avg_ratio:.1f}x")
+        col3.metric("💸 平均股息率", f"{avg_yield:.1f}%")
+        col4.metric("🔍 全市场扫描",
+                   f"融资比>1: {stats.get('ratio_gt_1_count', '?')} 只")
+        col5.metric("⚡ 耗时", f"{stats['elapsed']:.0f}s")
+
+        st.divider()
+        st.plotly_chart(_plotly_bars(
+            ["分红融资比", "股息回报", "分红质量", "基本面", "分红承诺"],
+            [sum(r["div_fin_score"] for r in results) / len(results),
+             sum(r["yield_score"] for r in results) / len(results),
+             sum(r["quality_score"] for r in results) / len(results),
+             sum(r["fund_score"] for r in results) / len(results),
+             sum(r["commit_score"] for r in results) / len(results)],
+            color="#d2991d", height=280,
+        ), use_container_width=True)
+
+        st.divider()
+        st.subheader(f"💎 分红融资比排名 — 金标准: 历史分红 > 历史融资")
+
+        dfr_rows = []
+        for i, r in enumerate(results):
+            dfr_rows.append({
+                "#": i + 1,
+                "代码": r["code"],
+                "名称": r["name"],
+                "总分": r["total"],
+                "分红融资比": f"{r['div_fin_ratio']:.1f}x",
+                "累计分红/股": r["total_div_ps"],
+                "股息率%": r["div_yield"],
+                "连分年": r["consecutive_div_years"],
+                "总分红年": r["total_div_years"],
+                "分红比例%": r["payout_ratio"],
+                "ROE%": r["roe"],
+                "负债%": r["debt"],
+                "行业": r["industry"][:8] if r["industry"] else "—",
+                "分红承诺": "✓" if r["has_commitment"] else "—",
+            })
+        dfr_df = pd.DataFrame(dfr_rows)
+
+        def _ratio_color(val):
+            try:
+                v = float(str(val).replace("x", ""))
+                if v >= 2: return "background-color: #d4edda; color: #155724"
+                elif v >= 1: return "background-color: #fff3cd; color: #856404"
+                else: return "background-color: #f8d7da; color: #721c24"
+            except Exception:
+                return ""
+
+        styler = dfr_df.style.applymap(_ratio_color, subset=["分红融资比"]).applymap(
+            color_score, subset=["总分"]
+        ).format({
+            "股息率%": "{:.1f}", "分红比例%": "{:.0f}",
+            "ROE%": "{:.1f}", "负债%": "{:.1f}",
+        })
+
+        st.dataframe(styler, use_container_width=True, hide_index=True,
+                     column_config={
+                         "#": st.column_config.NumberColumn("#", width="small"),
+                         "代码": st.column_config.TextColumn("代码", width="small"),
+                         "名称": st.column_config.TextColumn("名称", width="small"),
+                         "总分": st.column_config.NumberColumn("总分", width="small"),
+                         "分红融资比": st.column_config.TextColumn("分红融资比", width="small"),
+                         "累计分红/股": st.column_config.NumberColumn("累计分红/股", width="small"),
+                     }, height=600)
+
+        st.divider()
+
+        ratio_gt_1_pct = stats.get("ratio_gt_1_pct", 0)
+        st.markdown(f"""
+        <div class="cockpit-card" style="border-left: 3px solid #d2991d; padding: 16px;">
+            <h4 style="color:#d2991d;">📊 扫描统计</h4>
+            <p><b>A股全量:</b> {stats['universe']} →
+               <b>T1基础:</b> {stats['t1_passed']} →
+               <b>分红融资比>1:</b> {stats.get('ratio_gt_1_count', '?')} 只 ({ratio_gt_1_pct}%) →
+               <b>最终入选:</b> {stats['passed']} 只</p>
+            <p style="color:#8b949e; font-size:0.85em;">
+                核心筛选逻辑来自知乎 kaer：一个企业历史累计分红 > 历史融资额，
+                才说明管理层德才兼备，值得散户信任。A股约 800/5000 只满足此条件。
+            </p>
+        </div>
+        """, unsafe_allow_html=True)
+
+        csv_buf = io.StringIO()
+        dfr_df.to_csv(csv_buf, index=False)
+        st.download_button("📥 下载 CSV", csv_buf.getvalue(),
+                           file_name=f"dividend_screen_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
+                           mime="text/csv")
+
 else:
     # ── No button clicked yet — show cached results or welcome ──
     _cached = None
@@ -1379,6 +1539,9 @@ else:
     elif mode == "价值投资" and st.session_state.value_results is not None:
         _cached = st.session_state.value_results
         _cached_stats = st.session_state.value_stats
+    elif mode == "分红融资比" and st.session_state.dfr_results is not None:
+        _cached = st.session_state.dfr_results
+        _cached_stats = st.session_state.dfr_stats
 
     last_at = st.session_state.get("last_run_at", "")
     last_mode = st.session_state.get("last_mode", "")
@@ -1470,6 +1633,46 @@ else:
             st.divider()
             st.caption("💡 **投资逻辑**: 高股息提供安全垫，央国企信用背书减少下行风险，估值低位提供向上空间。")
 
+        elif mode == "分红融资比":
+            results = _cached
+            stats = _cached_stats
+            st.toast(f"📋 显示上次检索结果 — {len(results)} 只入围", icon="📋")
+
+            avg_ratio = sum(r["div_fin_ratio"] for r in results) / len(results)
+            avg_yield = sum(r["div_yield"] for r in results) / len(results)
+            col1, col2, col3, col4, col5 = st.columns(5)
+            col1.metric("💎 入选股票", f"{len(results)} 只")
+            col2.metric("📊 平均分红融资比", f"{avg_ratio:.1f}x")
+            col3.metric("💸 平均股息率", f"{avg_yield:.1f}%")
+            col4.metric("🔍 全市场扫描",
+                       f"融资比>1: {stats.get('ratio_gt_1_count', '?')} 只")
+            col5.metric("⚡ 耗时", f"{stats['elapsed']:.0f}s")
+            st.divider()
+            st.subheader(f"💎 分红融资比排名 — 金标准: 历史分红 > 历史融资")
+            dfr_rows = []
+            for i, r in enumerate(results):
+                dfr_rows.append({
+                    "#": i+1, "代码": r["code"], "名称": r["name"],
+                    "总分": r["total"], "分红融资比": f"{r['div_fin_ratio']:.1f}x",
+                    "累计分红/股": r["total_div_ps"], "股息率%": r["div_yield"],
+                    "连分年": r["consecutive_div_years"], "总分红年": r["total_div_years"],
+                    "分红比例%": r["payout_ratio"], "ROE%": r["roe"],
+                    "负债%": r["debt"], "行业": r["industry"][:8] if r["industry"] else "—",
+                    "分红承诺": "✓" if r["has_commitment"] else "—",
+                })
+            dfr_df = pd.DataFrame(dfr_rows)
+            st.dataframe(dfr_df, use_container_width=True, hide_index=True,
+                         column_config={
+                             "#": st.column_config.NumberColumn("#", width="small"),
+                             "总分": st.column_config.NumberColumn("总分", width="small"),
+                         }, height=500)
+            st.divider()
+            st.markdown(f"""
+            **扫描统计:** A股 {stats['universe']} → T1 {stats['t1_passed']} →
+            融资比>1: {stats.get('ratio_gt_1_count', '?')} 只 ({stats.get('ratio_gt_1_pct', 0)}%) →
+            最终入选 {stats['passed']} 只
+            """)
+
     else:
         # ── True welcome screen (no prior results) ──
         if mode == "选股排名":
@@ -1483,7 +1686,38 @@ else:
 
             ### 筛选逻辑
 
-            **Tier 1** 基础过滤 → **Tier 2** 财务门槛(ROE≥10%, 营收>5亿, 负债<60%) → **九维度打分排序**
+            **Tier 1** 基础过滤 → **Tier 2** 财务门槛(ROE≥8%, 营收>3亿, 负债<70%) → **九维度打分排序**
+            """)
+        elif mode == "分红融资比":
+            st.markdown("""
+            ### 核心金标准 · 分红融资比 > 1
+
+            来自知乎 **kaer** 的 "真传一句话"：
+
+            > **一个企业的历史累计分红一定要大于它的历史融资额，才值得投资。**
+
+            ### 五维评分体系
+
+            | 维度 | 权重 | 衡量什么 |
+            |------|------|----------|
+            | **分红融资比** | 35% | 历史累计分红 ÷ 累计融资，>1 才及格 |
+            | **股息回报** | 25% | 近3年平均股息率 + 当前股息率 |
+            | **分红质量** | 20% | 连续分红年数 + 分红比例是否在30-70% |
+            | **基本面** | 10% | ROE + 负债率 |
+            | **分红承诺** | 10% | 是否将分红写入公司章程 |
+
+            ### 使用方法
+
+            1. 左侧设置参数（默认扫 500 只约 2-3 分钟）
+            2. 点击 **"分红融资比选股"**
+            3. 等待扫描完成
+            4. 查看排序、下载 CSV
+
+            ### 为什么不用股息率筛选？
+
+            股息率 = 近一年分红/当前股价。大股东可能为套现搞一次性的高分红，
+            可能处于周期景气顶点，可能股价暴跌导致股息率虚高。
+            **看历史分红融资比，更能反映公司长期回报股东的能力。**
             """)
         else:
             st.markdown("""
