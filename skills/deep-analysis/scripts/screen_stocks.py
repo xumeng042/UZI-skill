@@ -494,24 +494,18 @@ def filter_basic(code: str, name: str) -> bool:
 
 
 def filter_financial(m: Dict[str, Any]) -> Optional[str]:
-    """Tier 2: financial criteria. Returns fail reason or None."""
+    """Tier 2: financial criteria. Returns fail reason or None.
+
+    Only filters truly unscoreable stocks (no data at all).
+    Scoring system handles quality ranking — no hard ROE/profit cutoffs.
+    """
     roe = m.get("roe_latest") or 0
     np_val = m.get("net_profit_latest") or 0
     rev = m.get("revenue_latest") or 0
-    debt = m.get("debt_ratio") or 100
 
-    # Detect stocks with no financial data (delisted/historical)
+    # Only block stocks with genuinely no financial data (delisted/historical)
     if roe == 0 and rev == 0 and np_val == 0:
         return "数据不可用"
-
-    if roe < 8:
-        return f"ROE={roe:.1f}%"
-    if np_val <= 0:
-        return "净亏损"
-    if rev < 3:
-        return f"营收={rev:.1f}亿"
-    if debt > 70:
-        return f"负债率={debt:.1f}%"
     return None
 
 
