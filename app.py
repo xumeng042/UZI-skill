@@ -14,6 +14,8 @@ import json
 from datetime import datetime
 
 import pandas as pd
+import plotly.graph_objects as go
+import plotly.express as px
 import streamlit as st
 
 # Import the screening engine
@@ -219,7 +221,7 @@ with st.sidebar:
             "选股排名": "🚀 开始选股",
             "趋势预判": "🔮 开始预判",
             "量化扫描": "⚡ 量化扫描",
-            "价值投资": "💰 价值筛选",
+            "价值投资": "💰 价值排名",
         }
         run_clicked = st.button(btn_labels.get(mode, "▶️ 开始"), type="primary", use_container_width=True)
 
@@ -324,6 +326,86 @@ def color_score(val):
         return f"background-color: #fff3cd; color: #856404"
     else:
         return f"background-color: #f8d7da; color: #721c24"
+
+
+# ── Plotly chart helpers ──────────────────────────────────────────────────
+
+def _plotly_radar(labels: list, values: list, title: str = "", max_val: float = 10) -> go.Figure:
+    """Spider/radar chart for multi-dimension scoring."""
+    values_closed = list(values) + [values[0]]
+    labels_closed = list(labels) + [labels[0]]
+    fig = go.Figure()
+    fig.add_trace(go.Scatterpolar(
+        r=values_closed, theta=labels_closed,
+        fill='toself', fillcolor='rgba(88, 166, 255, 0.25)',
+        line=dict(color='#58a6ff', width=2.5),
+        marker=dict(color='#58a6ff', size=6),
+        name=title,
+    ))
+    fig.update_polar(
+        radialaxis=dict(range=[0, max_val], gridcolor='#30363d', tickfont=dict(color='#8b949e', size=10)),
+        angularaxis=dict(gridcolor='#30363d', tickfont=dict(color='#e6edf3', size=11)),
+        bgcolor='#0d1117',
+    )
+    fig.update_layout(
+        paper_bgcolor='#0d1117', plot_bgcolor='#0d1117',
+        font=dict(color='#e6edf3'), margin=dict(l=40, r=40, t=40, b=40),
+        height=380, showlegend=False,
+    )
+    return fig
+
+
+def _plotly_bars(labels: list, values: list, title: str = "", color: str = "#58a6ff",
+                 height: int = 300, horizontal: bool = False) -> go.Figure:
+    """Styled bar chart matching dark theme."""
+    if horizontal:
+        fig = go.Figure(go.Bar(
+            x=values, y=labels, orientation='h',
+            marker=dict(color=color, line=dict(color='#30363d', width=1)),
+            text=[f"{v:.1f}" for v in values], textposition='outside',
+            textfont=dict(color='#8b949e', size=11),
+        ))
+    else:
+        fig = go.Figure(go.Bar(
+            x=labels, y=values,
+            marker=dict(color=color, line=dict(color='#30363d', width=1)),
+            text=[f"{v:.1f}" for v in values], textposition='outside',
+            textfont=dict(color='#8b949e', size=11),
+        ))
+    fig.update_layout(
+        paper_bgcolor='#0d1117', plot_bgcolor='#0d1117',
+        font=dict(color='#e6edf3'), margin=dict(l=20, r=20, t=20, b=20),
+        height=height, showlegend=False,
+        xaxis=dict(gridcolor='#21262d', zeroline=False),
+        yaxis=dict(gridcolor='#21262d', zeroline=False),
+    )
+    if title:
+        fig.update_layout(title=dict(text=title, font=dict(size=14, color='#e6edf3')))
+    return fig
+
+
+def _plotly_grouped_bars(labels: list, series: dict, title: str = "", height: int = 400) -> go.Figure:
+    """Grouped bar chart for multi-series comparison (e.g. trend horizons)."""
+    colors = ["#58a6ff", "#3fb950", "#d29922", "#f78166"]
+    fig = go.Figure()
+    for i, (name, vals) in enumerate(series.items()):
+        fig.add_trace(go.Bar(
+            x=labels, y=vals, name=name,
+            marker=dict(color=colors[i % len(colors)], line=dict(color='#30363d', width=1)),
+            text=[f"{v:.0f}" for v in vals], textposition='outside',
+            textfont=dict(color='#8b949e', size=10),
+        ))
+    fig.update_layout(
+        paper_bgcolor='#0d1117', plot_bgcolor='#0d1117',
+        font=dict(color='#e6edf3'), margin=dict(l=20, r=20, t=30, b=20),
+        height=height, barmode='group',
+        legend=dict(font=dict(color='#8b949e'), orientation='h', yanchor='bottom', y=1.02),
+        xaxis=dict(gridcolor='#21262d', tickfont=dict(size=10)),
+        yaxis=dict(gridcolor='#21262d'),
+    )
+    if title:
+        fig.update_layout(title=dict(text=title, font=dict(size=14, color='#e6edf3')))
+    return fig
 
 
 def build_results_df(results):
@@ -686,11 +768,21 @@ def _render_cockpit_sections(data: dict):
 
     daily = nb.get("daily_flows", [])
     if daily:
-        nbdf = pd.DataFrame({
-            "日期": [d["date"][-5:] for d in daily[-20:]],
-            "净流入(亿)": [d["net_yi"] for d in daily[-20:]],
-        })
-        st.bar_chart(nbdf.set_index("日期"), height=200)
+        dates = [d["date"][-5:] for d in daily[-20:]]
+        flows = [d["net_yi"] for d in daily[-20:]]
+        bar_colors = ["#3fb950" if v >= 0 else "#f85149" for v in flows]
+        fig = go.Figure(go.Bar(
+            x=dates, y=flows,
+            marker=dict(color=bar_colors, line=dict(color='#30363d', width=1)),
+        ))
+        fig.update_layout(
+            paper_bgcolor='#0d1117', plot_bgcolor='#0d1117',
+            font=dict(color='#e6edf3'), margin=dict(l=20, r=20, t=10, b=20),
+            height=220, showlegend=False,
+            xaxis=dict(gridcolor='#21262d', tickfont=dict(size=10)),
+            yaxis=dict(gridcolor='#21262d', title='净流入(亿)', titlefont=dict(size=10)),
+        )
+        st.plotly_chart(fig, use_container_width=True)
     elif nb.get("_error"):
         st.info(f"北向资金数据暂不可用 — {nb['_error']}")
 
@@ -705,40 +797,73 @@ def _render_cockpit(run_clicked: bool):
     st.markdown("""
     <style>
     .cockpit-card {
-        background: #161b22;
+        background: linear-gradient(135deg, #161b22 0%, #0d1117 100%);
         border: 1px solid #30363d;
-        border-radius: 10px;
-        padding: 16px;
-        margin: 6px 0;
-        transition: border-color 0.2s;
+        border-radius: 12px;
+        padding: 18px;
+        margin: 8px 0;
+        transition: all 0.25s ease;
+        position: relative;
+        overflow: hidden;
+    }
+    .cockpit-card::before {
+        content: '';
+        position: absolute;
+        top: 0; left: 0; right: 0;
+        height: 2px;
+        background: linear-gradient(90deg, #58a6ff, #3fb950, #d29922, #f78166);
+        opacity: 0;
+        transition: opacity 0.25s ease;
     }
     .cockpit-card:hover {
         border-color: #58a6ff;
+        transform: translateY(-2px);
+        box-shadow: 0 4px 20px rgba(88, 166, 255, 0.1);
+    }
+    .cockpit-card:hover::before {
+        opacity: 1;
     }
     .cockpit-header {
         background: linear-gradient(135deg, #0d1117 0%, #161b22 100%);
         border-bottom: 2px solid #30363d;
-        padding: 12px 16px;
-        border-radius: 8px;
-        margin-bottom: 12px;
+        padding: 14px 18px;
+        border-radius: 10px;
+        margin-bottom: 14px;
     }
     .cockpit-metric-label {
         font-size: 0.8em;
         color: #8b949e;
+        letter-spacing: 0.5px;
     }
     .cockpit-metric-value {
-        font-size: 1.4em;
+        font-size: 1.5em;
         font-weight: 700;
         color: #e6edf3;
     }
     .news-item {
-        padding: 8px 12px;
-        border-left: 2px solid #30363d;
-        margin: 4px 0;
+        padding: 10px 14px;
+        border-left: 3px solid #30363d;
+        margin: 6px 0;
         font-size: 0.85em;
+        border-radius: 0 6px 6px 0;
+        transition: all 0.2s ease;
+        background: #0d1117;
     }
     .news-item:hover {
         border-left-color: #58a6ff;
+        background: #161b22;
+    }
+    .index-card {
+        text-align: center;
+        padding: 16px 12px;
+        border-radius: 12px;
+        background: linear-gradient(180deg, #161b22 0%, #0d1117 100%);
+        border: 1px solid #30363d;
+        transition: all 0.2s ease;
+    }
+    .index-card:hover {
+        border-color: #58a6ff;
+        box-shadow: 0 2px 12px rgba(88, 166, 255, 0.08);
     }
     </style>
     """, unsafe_allow_html=True)
@@ -889,22 +1014,16 @@ elif run_clicked:
 
         col_chart, col_table = st.columns([1, 3])
         with col_chart:
-            st.subheader("分数分布")
-            chart_df = pd.DataFrame({
-                "维度": ["盈利能力", "成长性", "财务健康", "估值", "护城河", "政策风口", "机构持仓", "行业周期", "实控风险"],
-                "平均分": [
-                    results_df["盈利能力"].mean(),
-                    results_df["成长性"].mean(),
-                    results_df["财务健康"].mean(),
-                    results_df["估值"].mean(),
-                    results_df["护城河"].mean(),
-                    results_df["政策风口"].mean(),
-                    results_df["机构持仓"].mean(),
-                    results_df["行业周期"].mean(),
-                    results_df["实控风险"].mean(),
-                ],
-            })
-            st.bar_chart(chart_df, x="维度", y="平均分", height=300)
+            st.subheader("九维雷达图")
+            dims = ["盈利能力", "成长性", "财务健康", "估值", "护城河", "政策风口", "机构持仓", "行业周期", "实控风险"]
+            avgs = [
+                results_df["盈利能力"].mean(), results_df["成长性"].mean(),
+                results_df["财务健康"].mean(), results_df["估值"].mean(),
+                results_df["护城河"].mean(), results_df["政策风口"].mean(),
+                results_df["机构持仓"].mean(), results_df["行业周期"].mean(),
+                results_df["实控风险"].mean(),
+            ]
+            st.plotly_chart(_plotly_radar(dims, avgs, "入围股票平均分"), use_container_width=True)
 
         with col_table:
             st.subheader(f"TOP {len(results_df)} 排名")
@@ -1065,14 +1184,15 @@ elif run_clicked:
 
         # Horizon comparison chart
         st.subheader("各周期预判概率对比")
-        chart_data = pd.DataFrame({
-            "股票": [f"{r['code']} {r['name']}" for r in results[:15]],
-            "1个月": [r["prob_1m"] for r in results[:15]],
-            "2个月": [r["prob_2m"] for r in results[:15]],
-            "3个月": [r["prob_3m"] for r in results[:15]],
-            "半年以上": [r["prob_6m"] for r in results[:15]],
-        }).set_index("股票")
-        st.bar_chart(chart_data, height=400)
+        top15 = results[:15]
+        stock_labels = [f"{r['code']} {r['name']}" for r in top15]
+        series = {
+            "1个月": [r["prob_1m"] for r in top15],
+            "2个月": [r["prob_2m"] for r in top15],
+            "3个月": [r["prob_3m"] for r in top15],
+            "半年以上": [r["prob_6m"] for r in top15],
+        }
+        st.plotly_chart(_plotly_grouped_bars(stock_labels, series, height=420), use_container_width=True)
 
         # CSV download
         csv_buf = io.StringIO()
@@ -1179,7 +1299,7 @@ elif run_clicked:
                      stats, results)
 
         if not results:
-            st.warning("没有股票通过价值投资筛选。当前市场高股息央国企可能估值已偏高。")
+            st.warning("没有股票通过基础筛选。请检查数据源是否正常。")
             st.stop()
 
         st.toast(f"✅ 价值筛选完成！{len(results)} 只股票入围，耗时 {stats['elapsed']:.0f}s", icon="✅")
@@ -1195,19 +1315,17 @@ elif run_clicked:
         col5.metric("⚡ 耗时", f"{stats['elapsed']:.0f}s")
 
         st.divider()
-        st.subheader(f"💰 价值投资组合 — 高股息·央国企·基本面好·估值低")
+        st.subheader(f"💰 价值投资排名 — 高股息·央国企·基本面好·估值低")
 
         # Score breakdown chart
-        chart_df = pd.DataFrame({
-            "维度": ["股息回报", "估值安全边际", "基本面质量", "稳定性"],
-            "平均分": [
-                sum(r["div_score"] for r in results) / len(results),
-                sum(r["val_score"] for r in results) / len(results),
-                sum(r["fund_score"] for r in results) / len(results),
-                sum(r["stab_score"] for r in results) / len(results),
-            ],
-        })
-        st.bar_chart(chart_df, x="维度", y="平均分", height=250)
+        dims = ["股息回报", "估值安全边际", "基本面质量", "稳定性"]
+        avgs = [
+            sum(r["div_score"] for r in results) / len(results),
+            sum(r["val_score"] for r in results) / len(results),
+            sum(r["fund_score"] for r in results) / len(results),
+            sum(r["stab_score"] for r in results) / len(results),
+        ]
+        st.plotly_chart(_plotly_bars(dims, avgs, color="#3fb950", height=280), use_container_width=True)
 
         st.divider()
 
@@ -1282,12 +1400,10 @@ else:
             st.divider()
             col_chart, col_table = st.columns([1, 3])
             with col_chart:
-                st.subheader("分数分布")
-                chart_df = pd.DataFrame({
-                    "维度": ["盈利能力", "成长性", "财务健康", "估值", "护城河", "政策风口", "机构持仓", "行业周期", "实控风险"],
-                    "平均分": [results_df["盈利能力"].mean(), results_df["成长性"].mean(), results_df["财务健康"].mean(), results_df["估值"].mean(), results_df["护城河"].mean(), results_df["政策风口"].mean(), results_df["机构持仓"].mean(), results_df["行业周期"].mean(), results_df["实控风险"].mean()],
-                })
-                st.bar_chart(chart_df, x="维度", y="平均分", height=300)
+                st.subheader("九维雷达图")
+                dims = ["盈利能力", "成长性", "财务健康", "估值", "护城河", "政策风口", "机构持仓", "行业周期", "实控风险"]
+                avgs = [results_df["盈利能力"].mean(), results_df["成长性"].mean(), results_df["财务健康"].mean(), results_df["估值"].mean(), results_df["护城河"].mean(), results_df["政策风口"].mean(), results_df["机构持仓"].mean(), results_df["行业周期"].mean(), results_df["实控风险"].mean()]
+                st.plotly_chart(_plotly_radar(dims, avgs, "入围股票平均分"), use_container_width=True)
             with col_table:
                 st.subheader(f"TOP {len(results_df)} 排名")
                 styler = results_df.style.applymap(color_score, subset=["盈利能力", "成长性", "财务健康", "估值", "护城河", "政策风口", "机构持仓", "行业周期", "实控风险"]).format({"总分": "{:.1f}", "盈利能力": "{:.1f}", "成长性": "{:.1f}", "财务健康": "{:.1f}", "估值": "{:.1f}", "护城河": "{:.1f}", "政策风口": "{:.1f}", "机构持仓": "{:.1f}", "行业周期": "{:.1f}", "实控风险": "{:.1f}"})
@@ -1345,7 +1461,7 @@ else:
             col4.metric("📊 筛选率", f"{stats['passed']}/{stats['t1_passed']}")
             col5.metric("⚡ 耗时", f"{stats['elapsed']:.0f}s")
             st.divider()
-            st.subheader(f"💰 价值投资组合 — 高股息·央国企·基本面好·估值低")
+            st.subheader(f"💰 价值投资排名 — 高股息·央国企·基本面好·估值低")
             value_rows = []
             for i, r in enumerate(results):
                 value_rows.append({"#": i+1, "代码": r["code"], "名称": r["name"], "总分": r["total"], "股息率%": r["div_yield"], "分红年": r["div_years"], "PE分位%": r["pe_q"], "PB分位%": r["pb_q"], "ROE%": r["roe"], "负债%": r["debt"], "类型": r["soe"], "股息得分": r["div_score"], "估值得分": r["val_score"], "质量得分": r["fund_score"], "稳定得分": r["stab_score"]})

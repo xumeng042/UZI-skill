@@ -1,13 +1,8 @@
 #!/usr/bin/env python3
 """价值投资筛选模块 — 高股息+央国企+基本面好+估值低.
 
-筛选逻辑:
-1. 股息率 >= 4%  — 稳定现金回报
-2. 央国企         — 信用背书，下跌空间有限
-3. ROE >= 10%    — 盈利能力达标
-4. 负债率 < 55%   — 财务稳健
-5. PE分位 < 50%   — 估值偏低
-6. PB分位 < 50%   — 估值偏低
+对所有通过基础筛选的股票进行价值评分，按总分排名。
+不做硬性过滤，让分数说话。
 
 评分维度:
 - 股息回报(30%): 股息率越高越好，连续分红年数加分
@@ -174,7 +169,8 @@ def run_value_screening(max_stocks: int = 0, top_n: int = 20,
                          rate_limit: float = 5.0) -> Tuple[List[Dict], Dict]:
     """Run value investing screening pipeline.
 
-    Returns (rankings, stats).
+    Scores all candidates on value metrics and ranks by total score.
+    No hard filters — every stock gets a score, top N win.
     """
     import baostock as bs
 
@@ -203,7 +199,7 @@ def run_value_screening(max_stocks: int = 0, top_n: int = 20,
             if (i + 1) % 50 == 0:
                 elapsed = time.monotonic() - t0
                 rate = (i + 1) / elapsed if elapsed > 0 else 0
-                print(f"  {i+1}/{len(candidates)} ({rate:.1f}/s) | {len(results)} passed",
+                print(f"  {i+1}/{len(candidates)} ({rate:.1f}/s) | {len(results)} scored",
                       file=sys.stderr, flush=True)
 
             time.sleep(1.0 / rate_limit)
@@ -213,28 +209,7 @@ def run_value_screening(max_stocks: int = 0, top_n: int = 20,
                 failures += 1
                 continue
 
-            # 价值投资筛选条件
-            dy = m.get("div_yield", 0) or 0
-            if dy < 4.0:
-                continue  # 股息率不达标
-
-            if not is_soe(m):
-                continue  # 不是央国企
-
-            roe = m.get("roe_latest", 0) or 0
-            if roe < 10:
-                continue
-
-            debt = m.get("debt_ratio", 50) or 50
-            if debt > 55:
-                continue
-
-            pe_q = m.get("pe_quantile_5y", 50) or 50
-            pb_q = m.get("pb_quantile_5y", 50) or 50
-            if pe_q > 50 and pb_q > 50:
-                continue  # 估值不低
-
-            # 评分
+            # Score every stock — let the score do the ranking, not hard filters
             scored = score_value_stock(m)
             results.append(scored)
     finally:
